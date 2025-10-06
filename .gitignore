@@ -1,0 +1,59 @@
+# Dependencies
+node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+package-lock.json
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+venv/
+
+# Build output
+dist/
+build/
+coverage/
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Runtime data
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# Optional: Database files
+*.sqlite
+*.db
+
+# Optional: Temporary files
+tmp/
+temp/
+
+# Optional: Coverage directory
+coverage/
+.nyc_output/
+
+# Optional: Documentation
+docs/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Audio and text storage
+audio_storage/
+text_storage/
