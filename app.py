@@ -1,4 +1,6 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, declarative_base
 from fastapi.responses import JSONResponse, FileResponse
 from dotenv import load_dotenv
 import httpx
@@ -13,6 +15,16 @@ import uuid
 load_dotenv()
 
 app = FastAPI()
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+@app.get("/")
+def read_root():
+    return {"message": "API connected to Postgres!"}
 
 # Azure Configuration
 AZURE_API_KEY = os.getenv("AZURE_API_KEY")
