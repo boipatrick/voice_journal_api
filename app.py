@@ -1,6 +1,4 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, ForeignKey, Text, Float
-from sqlalchemy.orm import sessionmaker, declarative_base, relationship
+from fastapi import FastAPI, File, UploadFile, HTTPException, Depends
 from fastapi.responses import JSONResponse, FileResponse
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,10 +7,17 @@ import os
 import json
 from pathlib import Path
 import shutil
-from typing import Optional
+from typing import Optional, List
 import uuid
 import datetime
 from datetime import datetime, timedelta
+from sqlalchemy.orm import Session
+from sqlalchemy import text
+
+#Database components
+from database import get_db, create_tables
+from models import Transcription, TranscriptionSegment
+
 
 
 load_dotenv()
@@ -31,48 +36,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
-
-class User(Base):
-    __tablename__ = "users"
-    
-    id = Column(String, primary_key=True)
-    email = Column(String, unique=True)
-    name = Column(String)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-class Transcription(Base):
-    __tablename__ = "transcriptions"
-    
-    id = Column(String, primary_key=True)
-    user_id = Column(String, ForeignKey("users.id"), nullable=True)
-    title = Column(String, nullable=True)
-    audio_file_path = Column(String)  # Path to stored audio file
-    transcript = Column(Text)  # Full transcript text
-    summary = Column(Text, nullable=True)  # Summary of transcript
-    analysis = Column(Text, nullable=True)  # AI analysis
-    created_at = Column(DateTime, default=datetime.utcnow)
-    
-    # Relationships
-    segments = relationship("TranscriptionSegment", back_populates="transcription")
-    user = relationship("User", backref="transcriptions")
-
-class TranscriptionSegment(Base):
-    __tablename__ = "transcription_segments"
-    
-    id = Column(Integer, primary_key=True)
-    transcription_id = Column(String, ForeignKey("transcriptions.id"))
-    timestamp = Column(String)  # Format like "00:01:23"
-    start_time = Column(Float, nullable=True)  # Start time in seconds
-    end_time = Column(Float, nullable=True)  # End time in seconds
-    text = Column(Text)
-    
-    # Relationship
-    transcription = relationship("Transcription", back_populates="segments")
 
 
 
@@ -86,7 +49,7 @@ AZURE_API_KEY = os.getenv("AZURE_API_KEY")
 AZURE_ENDPOINT = os.getenv("AZURE_ENDPOINT")
 AZURE_TRANSCRIBE_DEPLOYMENT = os.getenv("AZURE_TRANSCRIBE_DEPLOYMENT")
 AZURE_CHAT_DEPLOYMENT = os.getenv("AZURE_CHAT_DEPLOYMENT")
-AZURE_DEPLOYMENT_NAME = os.getenv("AZURE_DEPLOYMENT_NAME")
+
 API_VERSION = "2024-12-01-preview"
 
 # Test Azure credentials
@@ -269,3 +232,21 @@ async def download_processed_text(file_id: str):
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/test-db")
+def test_db(db: Session = Depends(get_db)):
+    try:
+        # Use text() to wrap the SQL query
+        result = db.execute(text("SELECT 1")).fetchone()
+        
+        # For checking tables
+        tables = db.execute(text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")).fetchall()
+        table_names = [table[0] for table in tables]
+        
+        return {
+            "status": "Connected", 
+            "result": result[0],
+            "tables": table_names
+        }
+    except Exception as e:
+        return {"status": "Error", "message": str(e)}
