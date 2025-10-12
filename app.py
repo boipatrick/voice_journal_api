@@ -1,6 +1,6 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, ForeignKey, Text, Float
+from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from fastapi.responses import JSONResponse, FileResponse
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,6 +11,8 @@ from pathlib import Path
 import shutil
 from typing import Optional
 import uuid
+import datetime
+from datetime import datetime, timedelta
 
 
 load_dotenv()
@@ -34,6 +36,46 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
+class User(Base):
+    __tablename__ = "users"
+    
+    id = Column(String, primary_key=True)
+    email = Column(String, unique=True)
+    name = Column(String)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class Transcription(Base):
+    __tablename__ = "transcriptions"
+    
+    id = Column(String, primary_key=True)
+    user_id = Column(String, ForeignKey("users.id"), nullable=True)
+    title = Column(String, nullable=True)
+    audio_file_path = Column(String)  # Path to stored audio file
+    transcript = Column(Text)  # Full transcript text
+    summary = Column(Text, nullable=True)  # Summary of transcript
+    analysis = Column(Text, nullable=True)  # AI analysis
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    segments = relationship("TranscriptionSegment", back_populates="transcription")
+    user = relationship("User", backref="transcriptions")
+
+class TranscriptionSegment(Base):
+    __tablename__ = "transcription_segments"
+    
+    id = Column(Integer, primary_key=True)
+    transcription_id = Column(String, ForeignKey("transcriptions.id"))
+    timestamp = Column(String)  # Format like "00:01:23"
+    start_time = Column(Float, nullable=True)  # Start time in seconds
+    end_time = Column(Float, nullable=True)  # End time in seconds
+    text = Column(Text)
+    
+    # Relationship
+    transcription = relationship("Transcription", back_populates="segments")
+
+
+
 
 @app.get("/")
 def read_root():
