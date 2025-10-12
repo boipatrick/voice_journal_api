@@ -3,6 +3,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 from fastapi.responses import JSONResponse, FileResponse
 from dotenv import load_dotenv
+from fastapi.middleware.cors import CORSMiddleware
 import httpx
 import os
 import json
@@ -15,6 +16,18 @@ import uuid
 load_dotenv()
 
 app = FastAPI()
+
+# Add CORS middleware with specific allowed origins
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5174",  # Local development
+        "https://voice-frontend-nine.vercel.app"  # Production
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -97,7 +110,7 @@ async def process_with_azure_gpt(prompt: str, transcript: str):
             ],
             "max_tokens": 800,
             "temperature": 0.7,
-            "model": "gpt-4"  # or "gpt-35-turbo" depending on your deployment
+            "model": "gpt-4"  # or "gpt-35-turbo"
         }
         
         params = {"api-version": API_VERSION}
