@@ -57,3 +57,4 @@ __pycache__/
 # Audio and text storage
 audio_storage/
 text_storage/
+frontend/

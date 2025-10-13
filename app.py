@@ -61,11 +61,7 @@ API_VERSION = "2024-12-01-preview"
 if not AZURE_API_KEY or not AZURE_ENDPOINT:
     raise ValueError("Missing required Azure configuration")
 
-# Create storage directories
-UPLOAD_DIR = Path("audio_storage")
-TEXT_DIR = Path("text_storage")
-UPLOAD_DIR.mkdir(exist_ok=True)
-TEXT_DIR.mkdir(exist_ok=True)
+
 
 @app.post("/upload-audio")
 async def upload_audio(file: UploadFile = File(...), db: Session = Depends(get_db)):
@@ -82,8 +78,10 @@ async def upload_audio(file: UploadFile = File(...), db: Session = Depends(get_d
                 detail="Invalid file type. Supported formats: mp3, wav, ogg, m4a"
             )
         
-        # Generate unique ID
+        # Generate unique filename
         file_id = str(uuid.uuid4())
+        file_extension = Path(file.filename).suffix
+        unique_filename = f"{file_id}{file_extension}"
         
         # Read file data
         file_data = await file.read()
@@ -162,93 +160,222 @@ async def process_with_azure_gpt(prompt: str, transcript: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/process-transcript/{file_id}")
-async def process_transcript(file_id: str, prompt: str = "Please analyze this text and provide insights:"):
+async def process_transcript(
+    file_id: str, 
+    title: Optional[str] = None,
+    prompt: str = "Please analyze this text and provide insights:",
+    db: Session = Depends(get_db)
+):
     try:
-        # Find the audio file
-        audio_files = list(UPLOAD_DIR.glob(f"{file_id}.*"))
-        if not audio_files:
-            raise HTTPException(status_code=404, detail="Audio file not found")
+        # Find the transcription in database
+        transcription = db.query(Transcription).filter(Transcription.id == file_id).first()
+        if not transcription:
+            raise HTTPException(status_code=404, detail="Transcription not found")
         
-        audio_path = audio_files[0]
+        if title:
+            transcription.title = title
         
-        # Get the actual file extension and mime type
-        file_extension = audio_path.suffix.lower()
-        mime_type = {
-            '.mp3': 'audio/mpeg',
-            '.wav': 'audio/wav',
-            '.m4a': 'audio/x-m4a',
-            '.ogg': 'audio/ogg'
-        }.get(file_extension, 'audio/mpeg')
-
-        # Step 1: Transcribe audio using Azure
-        transcribe_url = f"{AZURE_ENDPOINT}/openai/deployments/{AZURE_TRANSCRIBE_DEPLOYMENT}/audio/transcriptions"
-        
-        # Transcribe the audio with modified file upload format
-        with open(audio_path, "rb") as audio_file:
-            # Create multipart form data with proper file format
-            data = audio_file.read()
-            if not data:
-                raise HTTPException(status_code=400, detail="Audio file is empty")
-            audio_file.seek(0)
-            files = {
-                "file": (audio_path.name, audio_file, mime_type)
-            }
+        # Create temporary file for processing
+        temp_file = Path(f"temp_{file_id}")
+        try:
+            # Write audio data to temp file
+            with open(temp_file, "wb") as f:
+                f.write(transcription.audio_data)
             
-            params = {"api-version": API_VERSION}
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    transcribe_url,
-                    headers={"api-key": AZURE_API_KEY},
-                    files=files,
-                    params=params
-                )
+            # Get MIME type for the Azure API
+            mime_type = transcription.audio_mime_type
+            
+            # Process with Azure Whisper
+            transcribe_url = f"{AZURE_ENDPOINT}/openai/deployments/{AZURE_TRANSCRIBE_DEPLOYMENT}/audio/transcriptions"
+            
+            with open(temp_file, "rb") as audio_file:
+                files = {
+                    "file": (transcription.audio_file_path, audio_file, mime_type)
+                }
                 
-                print(f"Azure Response Status: {response.status_code}")
-                print(f"Azure Response Content: {response.text}")
+                params = {"api-version": API_VERSION}
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.post(
+                        transcribe_url,
+                        headers={"api-key": AZURE_API_KEY},
+                        files=files,
+                        params=params
+                    )
                 
-            if response.status_code != 200:
-                raise HTTPException(
-                    status_code=response.status_code,
-                    detail=f"Azure Transcription API error: {response.text}"
-                )
+                if response.status_code != 200:
+                    raise HTTPException(
+                        status_code=response.status_code,
+                        detail=f"Azure Transcription API error: {response.text}"
+                    )
                 
-            transcription_result = response.json()
-            transcript_text = transcription_result.get("text", "")
-
-        # Step 2: Process the transcript with Azure GPT
+                transcription_result = response.json()
+                transcript_text = transcription_result.get("text", "")
+        finally:
+            # Clean up temp file
+            if temp_file.exists():
+                temp_file.unlink()
+        
+        # Process transcript with Azure GPT
         processed_text = await process_with_azure_gpt(prompt, transcript_text)
         
-        # Save processed text
-        text_file_path = TEXT_DIR / f"{file_id}_processed.txt"
-        with open(text_file_path, "w", encoding="utf-8") as f:
-            f.write(f"Original Transcript:\n\n{transcript_text}\n\nAnalysis:\n\n{processed_text}")
+        # Save results to database
+        transcription.transcript = transcript_text
+        transcription.summary = processed_text
+        
+        # Create segments based on sentences
+        import re
+        # Delete existing segments
+        db.query(TranscriptionSegment).filter(TranscriptionSegment.transcription_id == file_id).delete()
+        
+        # Create basic segmentation (one segment per sentence)
+        sentences = re.split(r'(?<=[.!?])\s+', transcript_text)
+        total_chars = len(transcript_text)
+        
+        for i, sentence in enumerate(sentences):
+            if not sentence.strip():
+                continue
+            
+            # Calculate approximate timestamp based on position in text
+            position = transcript_text.find(sentence) / total_chars if total_chars > 0 else 0
+            # Assuming 3-minute audio on average - adjust as needed
+            minutes = int(position * 3)
+            seconds = int((position * 3 * 60) % 60)
+            timestamp = f"{minutes:02d}:{seconds:02d}"
+            
+            segment = TranscriptionSegment(
+                transcription_id=file_id,
+                timestamp=timestamp,
+                text=sentence.strip()
+            )
+            db.add(segment)
+        
+        db.commit()
         
         return {
             "message": "Audio processed successfully",
             "file_id": file_id,
+            "title": transcription.title,
             "transcript": transcript_text,
             "analysis": processed_text
         }
     
     except Exception as e:
+        if 'db' in locals():
+            db.rollback()
         print(f"Processing error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/download-processed/{file_id}")
-async def download_processed_text(file_id: str):
+async def download_summary(file_id: str, db: Session = Depends(get_db)):
     try:
-        file_path = TEXT_DIR / f"{file_id}_processed.txt"
-        if not file_path.exists():
-            raise HTTPException(status_code=404, detail="Processed text file not found")
+        # Get transcription from database
+        transcription = db.query(Transcription).filter(Transcription.id == file_id).first()
+        if not transcription:
+            raise HTTPException(status_code=404, detail="Transcription not found")
             
-        return FileResponse(
-            path=file_path,
-            filename=f"processed_transcript_{file_id}.txt",
-            media_type="text/plain"
-        )
-    
+        # Generate the summary content from database fields
+        content = f"# {transcription.title}\n\n"
+        content += "## Transcript\n\n"
+        content += transcription.transcript + "\n\n"
+        content += "## Analysis\n\n"
+        content += transcription.summary
+        
+        # Create a temporary file to serve
+        temp_file = Path(f"temp_summary_{file_id}.txt")
+        try:
+            with open(temp_file, "w", encoding="utf-8") as f:
+                f.write(content)
+            
+            # Return the file as a download
+            return FileResponse(
+                path=temp_file,
+                media_type="text/plain",
+                filename=f"{transcription.title.replace(' ', '_')}_summary.txt"
+            )
+        finally:
+            # We'll let FastAPI clean up after sending
+            pass
+        
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+
+# Add these endpoints to your app.py file
+
+@app.get("/transcriptions")
+def get_transcriptions(db: Session = Depends(get_db)):
+    """Get all transcriptions"""
+    try:
+        transcriptions = db.query(Transcription).order_by(Transcription.created_at.desc()).all()
+        return [transcription.to_list_dict() for transcription in transcriptions]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/transcription/{id}")
+def get_transcription(id: str, db: Session = Depends(get_db)):
+    """Get a specific transcription by ID"""
+    try:
+        transcription = db.query(Transcription).filter(Transcription.id == id).first()
+        if not transcription:
+            raise HTTPException(status_code=404, detail="Transcription not found")
+        return transcription.to_dict()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/transcription/{id}")
+def delete_transcription(id: str, db: Session = Depends(get_db)):
+    """Delete a transcription by ID"""
+    try:
+        transcription = db.query(Transcription).filter(Transcription.id == id).first()
+        if not transcription:
+            raise HTTPException(status_code=404, detail="Transcription not found")
+        
+        # Delete from database (cascade will delete segments)
+        db.delete(transcription)
+        db.commit()
+        
+        return {"message": "Transcription deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        if 'db' in locals():
+            db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/audio/{file_id}")
+async def stream_audio(file_id: str, db: Session = Depends(get_db)):
+    """Stream audio file from database"""
+    try:
+        # Get transcription from database
+        transcription = db.query(Transcription).filter(Transcription.id == file_id).first()
+        if not transcription or not transcription.audio_data:
+            raise HTTPException(status_code=404, detail="Audio file not found")
+        
+        # Create a temporary file to serve
+        temp_file = Path(f"temp_{file_id}")
+        try:
+            with open(temp_file, "wb") as f:
+                f.write(transcription.audio_data)
+            
+            # Return the file with proper content type
+            return FileResponse(
+                path=temp_file,
+                media_type=transcription.audio_mime_type,
+                filename=transcription.audio_file_path
+            )
+        finally:
+            # FileResponse will handle cleanup
+            pass
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) 
+
+
+
 
 @app.get("/test-db")
 def test_db(db: Session = Depends(get_db)):
@@ -266,4 +393,29 @@ def test_db(db: Session = Depends(get_db)):
             "tables": table_names
         }
     except Exception as e:
+        return {"status": "Error", "message": str(e)}
+
+@app.get("/update-schema")
+def update_schema(db: Session = Depends(get_db)):
+    """Add missing columns to transcriptions table"""
+    try:
+        # Check if columns already exist
+        columns_query = """
+        SELECT column_name FROM information_schema.columns 
+        WHERE table_name = 'transcriptions' AND column_name IN ('audio_data', 'audio_mime_type')
+        """
+        existing_columns = [col[0] for col in db.execute(text(columns_query)).fetchall()]
+        
+        # Add audio_data column if missing
+        if 'audio_data' not in existing_columns:
+            db.execute(text("ALTER TABLE transcriptions ADD COLUMN audio_data BYTEA"))
+        
+        # Add audio_mime_type column if missing
+        if 'audio_mime_type' not in existing_columns:
+            db.execute(text("ALTER TABLE transcriptions ADD COLUMN audio_mime_type VARCHAR"))
+        
+        db.commit()
+        return {"message": "Database schema updated successfully"}
+    except Exception as e:
+        db.rollback()
         return {"status": "Error", "message": str(e)}
