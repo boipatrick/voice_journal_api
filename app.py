@@ -36,6 +36,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.on_event("startup")
+def startup_db_client():
+    create_tables()
+    print("Database tables created!")
+
 
 
 
@@ -63,7 +68,7 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 TEXT_DIR.mkdir(exist_ok=True)
 
 @app.post("/upload-audio")
-async def upload_audio(file: UploadFile = File(...)):
+async def upload_audio(file: UploadFile = File(...), db: Session = Depends(get_db)):
     try:
         # Validate file type
         allowed_types = [
@@ -77,23 +82,35 @@ async def upload_audio(file: UploadFile = File(...)):
                 detail="Invalid file type. Supported formats: mp3, wav, ogg, m4a"
             )
         
-        # Generate unique filename
+        # Generate unique ID
         file_id = str(uuid.uuid4())
-        file_extension = file.filename.split(".")[-1]
-        filename = f"{file_id}.{file_extension}"
         
-        # Save file
-        file_path = UPLOAD_DIR / filename
-        with file_path.open("wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        # Read file data
+        file_data = await file.read()
+        
+        # Create initial database record with placeholder title
+        title = f"New Recording {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        transcription = Transcription(
+            id=file_id,
+            title=title,
+            audio_file_path=file.filename,  # Store original filename
+            audio_data=file_data,  # Store binary data
+            audio_mime_type=file.content_type,
+            transcript="",
+            summary=""
+        )
+        db.add(transcription)
+        db.commit()
             
         return JSONResponse({
             "message": "Audio file uploaded successfully",
             "file_id": file_id,
-            "filename": filename
+            "filename": file.filename
         })
     
     except Exception as e:
+        if 'db' in locals():
+            db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
     
 

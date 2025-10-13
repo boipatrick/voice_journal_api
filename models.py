@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Text, DateTime, Integer, ForeignKey
+from sqlalchemy import Column, String, Text, DateTime, Integer, ForeignKey, LargeBinary
 from sqlalchemy.orm import relationship
 from datetime import datetime
 
@@ -13,6 +13,8 @@ class Transcription(Base):
     transcript = Column(Text)
     summary = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
+    audio_data = Column(LargeBinary)  # Store the actual audio data
+    audio_mime_type = Column(String)  # Store mime type
     
     # Relationship with segments
     segments = relationship("TranscriptionSegment", back_populates="transcription", cascade="all, delete-orphan")
