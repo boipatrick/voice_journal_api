@@ -303,8 +303,8 @@ async def download_summary(file_id: str, db: Session = Depends(get_db)):
 
 
 
-# Add these endpoints to your app.py file
 
+@app.get("/transcriptions")
 def get_transcriptions(db: Session = Depends(get_db)):
     """Get all transcriptions"""
     try:
@@ -313,6 +313,7 @@ def get_transcriptions(db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/transcription/{id}")
 def get_transcription(id: str, db: Session = Depends(get_db)):
     """Get a specific transcription by ID"""
     try:
