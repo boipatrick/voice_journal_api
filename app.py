@@ -305,23 +305,21 @@ async def download_summary(file_id: str, db: Session = Depends(get_db)):
 
 # Add these endpoints to your app.py file
 
-@app.get("/transcriptions")
 def get_transcriptions(db: Session = Depends(get_db)):
     """Get all transcriptions"""
     try:
         transcriptions = db.query(Transcription).order_by(Transcription.created_at.desc()).all()
-        return [transcription.to_list_dict() for transcription in transcriptions]
+        return [transcription.to_list_dict() for transcription in transcriptions]  # ✅ Uses to_list_dict()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/transcription/{id}")
 def get_transcription(id: str, db: Session = Depends(get_db)):
     """Get a specific transcription by ID"""
     try:
         transcription = db.query(Transcription).filter(Transcription.id == id).first()
         if not transcription:
             raise HTTPException(status_code=404, detail="Transcription not found")
-        return transcription.to_dict()
+        return transcription.to_dict()  # ✅ Uses to_dict() method
     except HTTPException:
         raise
     except Exception as e:
