@@ -54,7 +54,3 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# Audio and text storage
-audio_storage/
-text_storage/
-frontend/

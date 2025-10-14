@@ -29,6 +29,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5174",  # Local development
+        "http://localhost:5173",  # Local development
         "https://voice-frontend-nine.vercel.app"  # Production
     ],
     allow_credentials=True,
